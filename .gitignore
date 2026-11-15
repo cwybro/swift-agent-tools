@@ -1,0 +1,11 @@
+.build/
+bazel-*
+.swiftpreview/
+*.xcodeproj
+.DS_Store
+__pycache__/
+*.pyc
+# Local agent transcripts and scratch output
+runs/
+# Engine-written types for mod development
+integrations/claude-code/*/.claude-plugin/types/

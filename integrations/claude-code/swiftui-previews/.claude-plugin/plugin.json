@@ -1,0 +1,14 @@
+{
+  "name": "swiftui-previews",
+  "version": "0.2.0",
+  "description": "SwiftUI previews with hot reload for Bazel (rules_swift / rules_apple) projects, in a pane beside the chat.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "swiftpreviewPath": {
+      "type": "string",
+      "title": "swiftpreview binary",
+      "description": "Path to the swiftpreview CLI (tools/swiftpreview in the swift-agent-tools repo, built with `swift build -c release`). Default: swiftpreview on PATH.",
+      "default": "swiftpreview"
+    }
+  }
+}

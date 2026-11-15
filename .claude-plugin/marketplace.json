@@ -1,0 +1,17 @@
+{
+  "name": "swift-agent-tools",
+  "owner": { "name": "swift-agent-tools" },
+  "metadata": { "description": "Swift and SwiftUI tools for coding agents: SwiftUI previews with hot reload for Bazel, and an LLDB debugger shared between the agent and you." },
+  "plugins": [
+    {
+      "name": "swiftui-previews",
+      "source": "./integrations/claude-code/swiftui-previews",
+      "description": "SwiftUI previews with hot reload for Bazel projects, in a pane beside the chat, plus the swiftui_preview tool."
+    },
+    {
+      "name": "swiftdbg-pane",
+      "source": "./integrations/claude-code/swiftdbg-pane",
+      "description": "Debug Swift and iOS processes with LLDB: the swiftdbg MCP tools for Claude, and a pane where you follow and drive the same session."
+    }
+  ]
+}

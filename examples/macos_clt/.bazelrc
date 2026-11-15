@@ -1,0 +1,4 @@
+# Without Xcode, xcode_config cannot derive a deployment target from the SDK.
+common --macos_minimum_os=14.0
+common --host_macos_minimum_os=14.0
+common --check_direct_dependencies=off

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "swiftpreview": {
+      "command": "/path/to/swift-agent-tools/tools/swiftpreview/.build/release/swiftpreview",
+      "args": ["mcp"]
+    },
+    "swiftdbg": {
+      "command": "python3",
+      "args": ["/path/to/swift-agent-tools/tools/swiftdbg/server.py"],
+      "env": { "SWIFTDBG_PORT": "7311" }
+    }
+  }
+}

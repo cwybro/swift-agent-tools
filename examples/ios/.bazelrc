@@ -1,0 +1,4 @@
+# Emit .app directories instead of .ipa archives: faster to install on a simulator.
+build --define=apple.experimental.tree_artifact_outputs=1
+# Build for the simulator on Apple silicon.
+build --ios_multi_cpus=sim_arm64

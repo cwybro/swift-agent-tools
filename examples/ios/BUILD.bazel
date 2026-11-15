@@ -1,0 +1,9 @@
+load("@rules_swiftui_previews//previews:defs.bzl", "swiftui_preview_host")
+
+# One host can serve every feature library: list them all in deps.
+swiftui_preview_host(
+    name = "preview_host",
+    platform = "ios",
+    minimum_os_version = "17.0",
+    deps = ["//Features/Profile"],
+)

@@ -1,0 +1,15 @@
+load("@rules_swift//swift:swift_library.bzl", "swift_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Linked into every preview host. Thunk dylibs import it to register previews.
+swift_library(
+    name = "SwiftPreviewRuntime",
+    srcs = glob(["Sources/SwiftPreviewRuntime/*.swift"]),
+    module_name = "SwiftPreviewRuntime",
+)
+
+exports_files([
+    "HostMain/PreviewHostMain.swift",
+    "HostMain/Info.plist",
+])

@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swift Debug Viewer</title>
+<style>
+:root {
+  --bg: #fbfbfa; --panel: #ffffff; --line: #e6e4df; --text: #1d1c1a; --muted: #77746d;
+  --accent: #2f6fdb; --bp: #d94a3d; --cur: #fff3c4; --cur-edge: #e0b400; --code: #f4f3f0;
+  --ok: #2e8a4e; --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #1e1e1c; --line: #33322f; --text: #e9e7e2; --muted: #9a978f;
+    --accent: #6ea0ff; --bp: #ff6b5e; --cur: #3d3518; --cur-edge: #c9a227; --code: #232321; --ok: #5cc27f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+.pill { font: 11px var(--mono); padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.pill.stopped { color: var(--cur-edge); border-color: var(--cur-edge); }
+.pill.running { color: var(--ok); border-color: var(--ok); }
+.prog { color: var(--muted); font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.controls { display: flex; gap: 6px; }
+button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .4; cursor: default; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: minmax(0, 1fr) 220px; height: calc(100vh - 49px); }
+section { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: auto; min-height: 0; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0; padding: 8px 12px; position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--line); z-index: 1; }
+#source { grid-row: 1; grid-column: 1; background: var(--panel); }
+#side { grid-row: 1 / span 2; grid-column: 2; }
+#bottom { grid-row: 2; grid-column: 1; display: grid; grid-template-columns: 1fr 1fr; }
+#bottom > div { overflow: auto; min-height: 0; border-right: 1px solid var(--line); }
+.code { font: 12.5px/1.6 var(--mono); }
+.ln { display: flex; white-space: pre; }
+.ln .g { width: 56px; flex: none; text-align: right; padding-right: 14px; color: var(--muted); cursor: pointer; position: relative; user-select: none; }
+.ln .g:hover::before { content: ""; position: absolute; left: 8px; top: 50%; width: 9px; height: 9px; margin-top: -4.5px; border-radius: 50%; background: var(--bp); opacity: .3; }
+.ln.bp .g::before { content: ""; position: absolute; left: 8px; top: 50%; width: 9px; height: 9px; margin-top: -4.5px; border-radius: 50%; background: var(--bp); opacity: 1; }
+.ln.cur { background: var(--cur); box-shadow: inset 3px 0 var(--cur-edge); }
+.ln .t { padding-right: 16px; }
+.empty { color: var(--muted); padding: 16px; }
+.frame { padding: 5px 12px; cursor: pointer; font: 12px var(--mono); border-bottom: 1px solid var(--line); }
+.frame.sel { background: var(--code); box-shadow: inset 3px 0 var(--accent); }
+.frame small { color: var(--muted); display: block; }
+.var { font: 12px var(--mono); padding: 2px 0; }
+.var .row { padding: 2px 12px; display: flex; gap: 6px; }
+.var .tw { width: 12px; flex: none; cursor: pointer; color: var(--muted); }
+.var .n { color: var(--accent); }
+.var .ty { color: var(--muted); }
+.var .kids { padding-left: 14px; }
+pre { margin: 0; padding: 8px 12px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.act .who-agent { color: var(--accent); } .act .who-human { color: var(--ok); } .act .who-process { color: var(--muted); }
+form { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+input[type=text] { flex: 1; min-width: 0; font: 12px var(--mono); padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+label { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+#evalout { border-bottom: 1px solid var(--line); }
+@media (max-width: 760px) {
+  main { display: block; height: auto; }
+  section, #bottom > div { max-height: 60vh; }
+  #bottom { display: block; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Swift Debug Viewer</h1>
+  <span id="status" class="pill">idle</span>
+  <span id="prog" class="prog"></span>
+  <div class="controls">
+    <button data-a="continue" title="Continue">▶ Continue</button>
+    <button data-a="over" title="Step over">Step over</button>
+    <button data-a="in" title="Step into">Step in</button>
+    <button data-a="out" title="Step out">Step out</button>
+    <button data-a="pause" title="Pause">❚❚</button>
+  </div>
+</header>
+<main>
+  <section id="source"><h2 id="srcname">Source</h2><div id="code" class="code"><div class="empty">Waiting for the agent to set breakpoints or launch a program…</div></div></section>
+  <section id="side">
+    <h2>Call stack</h2><div id="stack"><div class="empty">Not stopped</div></div>
+    <h2>Variables</h2><div id="vars"><div class="empty">—</div></div>
+    <h2>Evaluate</h2>
+    <form id="evalform"><input id="expr" type="text" placeholder="cart.items[0].price" autocomplete="off"><label><input id="lldb" type="checkbox">lldb</label><button>Run</button></form>
+    <pre id="evalout"></pre>
+  </section>
+  <div id="bottom">
+    <div><h2>Program output</h2><pre id="out"></pre></div>
+    <div><h2>Activity (agent + you)</h2><pre id="act" class="act"></pre></div>
+  </div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+let state = null, version = -1, shownFile = null, fileCache = {};
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const base = p => (p || "").split("/").pop();
+
+async function post(path, body) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  return r.json();
+}
+async function source(path) {
+  if (!fileCache[path]) {
+    const r = await fetch("/source?path=" + encodeURIComponent(path));
+    if (!r.ok) return null;
+    fileCache[path] = (await r.json()).lines;
+  }
+  return fileCache[path];
+}
+
+async function renderSource() {
+  const snap = state.snapshot || {};
+  const frame = (snap.frames || [])[snap.selectedFrame || 0];
+  const file = (frame && frame.file) || shownFile || Object.keys(state.breakpoints)[0];
+  if (!file) return;
+  const lines = await source(file);
+  if (!lines) return;
+  const changed = file !== shownFile;
+  shownFile = file;
+  $("#srcname").textContent = base(file);
+  const bps = new Set((state.breakpoints[file] || []).map(b => b.line));
+  const cur = frame && frame.file === file && state.status === "stopped" ? frame.line : -1;
+  $("#code").innerHTML = lines.map((t, i) => {
+    const n = i + 1;
+    return `<div class="ln${bps.has(n) ? " bp" : ""}${n === cur ? " cur" : ""}" data-n="${n}"><span class="g">${n}</span><span class="t">${esc(t) || " "}</span></div>`;
+  }).join("");
+  if (cur > 0 && (changed || state._moved)) $(`.ln[data-n="${cur}"]`).scrollIntoView({block: "center"});
+}
+
+function varRows(vars) {
+  if (!vars || !vars.length) return '<div class="empty">No locals</div>';
+  return vars.map(v => `<div class="var"><div class="row"><span class="tw" data-ref="${v.ref}">${v.ref ? "▸" : ""}</span><span class="n">${esc(v.name)}</span><span class="ty">${esc(v.type)}</span><span>= ${esc(v.value)}</span></div><div class="kids"></div></div>`).join("");
+}
+
+async function render() {
+  const s = state, snap = s.snapshot || {};
+  $("#status").textContent = s.status + (snap.reason ? " · " + snap.reason : "");
+  $("#status").className = "pill " + s.status;
+  $("#prog").textContent = s.program || "";
+  const stopped = s.status === "stopped";
+  document.querySelectorAll("[data-a]").forEach(b => b.disabled = b.dataset.a === "pause" ? s.status !== "running" : !stopped);
+  $("#stack").innerHTML = stopped ? (snap.frames || []).map((f, i) =>
+    `<div class="frame${i === (snap.selectedFrame || 0) ? " sel" : ""}" data-i="${i}">#${i} ${esc(f.name)}<small>${esc(base(f.file))}${f.line ? ":" + f.line : ""}</small></div>`).join("")
+    : `<div class="empty">${s.status === "exited" ? "Exited with code " + esc(snap.exitCode) : "Not stopped"}</div>`;
+  $("#vars").innerHTML = stopped ? varRows(snap.locals) : '<div class="empty">—</div>';
+  $("#out").textContent = s.output || "";
+  $("#act").innerHTML = (s.activity || []).map(a => {
+    const who = (a.split(" ")[1] || "").replace(":", "");
+    return `<span class="who-${who}">${esc(a)}</span>`;
+  }).join("\n");
+  $("#act").parentElement.scrollTop = 1e9;
+  await renderSource();
+}
+
+async function poll() {
+  try {
+    const s = await (await fetch("/state")).json();
+    if (s.version !== version) {
+      const prevLine = state && state.snapshot && JSON.stringify((state.snapshot.frames || [])[0]);
+      s._moved = prevLine !== JSON.stringify(((s.snapshot || {}).frames || [])[0]);
+      state = s; version = s.version;
+      await render();
+    }
+  } catch (e) { $("#status").textContent = "disconnected"; }
+  setTimeout(poll, 400);
+}
+
+document.querySelectorAll("[data-a]").forEach(b => b.onclick = async () => {
+  const r = await post("/" + b.dataset.a);
+  if (r.error) alert(r.error);
+});
+$("#code").addEventListener("click", async e => {
+  const g = e.target.closest(".g"); if (!g || !shownFile) return;
+  const r = await post("/toggle", {file: shownFile, line: +g.parentElement.dataset.n});
+  if (r.error) alert(r.error);
+});
+$("#stack").addEventListener("click", async e => {
+  const f = e.target.closest(".frame"); if (f) await post("/frame", {index: +f.dataset.i});
+});
+$("#vars").addEventListener("click", async e => {
+  const tw = e.target.closest(".tw"); if (!tw || tw.dataset.ref === "0") return;
+  const kids = tw.parentElement.nextElementSibling;
+  if (kids.innerHTML) { kids.innerHTML = ""; tw.textContent = "▸"; return; }
+  const r = await post("/expand", {ref: +tw.dataset.ref});
+  kids.innerHTML = varRows(r.variables); tw.textContent = "▾";
+});
+$("#evalform").onsubmit = async e => {
+  e.preventDefault();
+  const r = await post("/eval", {expression: $("#expr").value, lldb: $("#lldb").checked});
+  $("#evalout").textContent = r.error ? "error: " + r.error : (r.type ? r.type + " = " : "") + r.result;
+};
+poll();
+</script>
+</body>
+</html>

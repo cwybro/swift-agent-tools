@@ -1,0 +1,8 @@
+module(
+    name = "rules_swiftui_previews",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_swift", version = "4.2.2")
+bazel_dep(name = "rules_apple", version = "5.4.0")
+bazel_dep(name = "apple_support", version = "2.9.1")

@@ -1,0 +1,7 @@
+load("@rules_swiftui_previews//previews:defs.bzl", "swiftui_preview_host")
+
+swiftui_preview_host(
+    name = "preview_host",
+    platform = "macos",
+    deps = ["//Views"],
+)

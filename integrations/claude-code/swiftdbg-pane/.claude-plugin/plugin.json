@@ -1,0 +1,1 @@
+{ "name": "swiftdbg-pane", "version": "0.1.0", "description": "A pane beside the chat showing the live swiftdbg (LLDB) debug session: source, breakpoints, stack, variables, controls.", "types": "./types/index.d.ts" }
