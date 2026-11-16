@@ -1,0 +1,6 @@
+# Each example is its own Bazel workspace (it depends on this module).
+examples
+# SwiftPM build output.
+tools/swiftpreview/.build
+# The end-to-end tests' fixture workspaces (copied elsewhere to run).
+tools/swiftpreview/Tests/Fixtures

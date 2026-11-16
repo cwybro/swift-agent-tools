@@ -59,6 +59,19 @@ public struct SessionOptions: Sendable {
   public var renderer: String = "auto"
   /// iOS: draw the strips inside the simulator's device bezel.
   public var deviceFrame = true
+  /// iOS: how long the host app stays running after `serve` stops, so the
+  /// next run in the same session folder skips installing and launching it.
+  /// 0 stops it with `serve`.
+  public var keepHostSeconds: Double = 600
+  /// iOS: shut down a simulator swiftpreview booted once no run has used it
+  /// for this long. 0 leaves simulators booted.
+  public var simulatorIdleSeconds: Double = 900
+  /// How `serve` notices saves: `poll` checks every source file's
+  /// modification time each `pollInterval`; `events` asks macOS (FSEvents);
+  /// `auto` polls up to `eventsThreshold` files, else uses events.
+  public var watch = "auto"
+  public var pollInterval: Double = 0.12
+  public var eventsThreshold = 200
 
   public init(workspace: BazelWorkspace, host: String, file: String, sessionDir: String) {
     self.workspace = workspace
@@ -95,14 +108,25 @@ public final class PreviewSession: @unchecked Sendable {
 
   var compiles: [ModuleCompile] = []
   var moduleBySource: [String: ModuleCompile] = [:]
+  /// Contents at the last full build, of the sources in `scope` (read as
+  /// they join it).
   var baseline: [String: String] = [:]
-  var mtimes: [String: Date] = [:]
+  /// Every host source's modification time at the last full build.
+  var builtStamps: [String: Date] = [:]
+  var graph = ModuleGraph(deps: [:])
+  /// What can change the current preview: what is watched.
+  var scope = WatchScope()
   var host: PreviewHost?
   var execRoot = ""
   var outputBase = ""
   var compiler: ThunkCompiler?
   var serial = 0
   var seq = 0
+  /// This process's run: requests and thunk folders carry it, since a host
+  /// kept warm from an earlier run has seen the same numbers.
+  public let run = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
+  /// Frames are cut into strips here, off the watch loop, in order.
+  let framing = DispatchQueue(label: "swiftpreview.framing")
   var lastControlID: Int?
   /// Identity of each built `.swiftmodule` (and the host binary) at the last
   /// full build. Another Bazel build (a second session, a manual `bazel
@@ -212,12 +236,11 @@ public final class PreviewSession: @unchecked Sendable {
       execRoot: execRoot, developerDir: ThunkCompiler.activeDeveloperDir(),
       moduleDirs: Array(Set(compiles.compactMap(\.moduleDir))).sorted())
 
+    graph = ModuleGraph(compiles, execRoot: execRoot)
+    builtStamps = [:]
+    for path in moduleBySource.keys { builtStamps[path] = mtime(path) }
     baseline = [:]
-    mtimes = [:]
-    for path in moduleBySource.keys {
-      baseline[path] = try? String(contentsOfFile: path, encoding: .utf8)
-      mtimes[path] = mtime(path)
-    }
+    _ = updateScope()
 
     status("launching", "starting the preview host")
     host?.terminate()
@@ -232,11 +255,37 @@ public final class PreviewSession: @unchecked Sendable {
       }
       host = SimulatorHost(bundlePath: bundle, deviceName: options.simulator)
     }
+    // A request or response left by an earlier run of this session folder
+    // (often for another workspace's host) must not reach the new host: it
+    // would load that run's thunks, and the first real request, numbered 1
+    // again, would look already handled.
+    try? FileManager.default.removeItem(atPath: requestPath)
     try? FileManager.default.removeItem(atPath: responsePath)
     try host!.launch(sessionDir: options.sessionDir)
+    if let sim = host as? SimulatorHost {
+      if sim.reused { status("launching", "kept the preview host from the last run") }
+      deviceInUse.withLock { $0 = sim.device }
+    }
     hostOutputs = outputs
     outputFingerprint = fingerprintOutputs()
     emitHost()
+  }
+
+  /// Narrows what is watched (and read on each render) to the previewed
+  /// module and the modules it imports. A source joining the scope that
+  /// changed since the last build means its module's built copy is older
+  /// than the thunks would assume: returns why a rebuild is needed.
+  func updateScope() -> String? {
+    guard let entry = moduleBySource[standardized(options.file)] else { return nil }
+    let modules = graph.closure(of: entry.moduleName)
+    let sources = Set(moduleBySource.filter { modules.contains($0.value.moduleName) }.keys)
+    var stale: String?
+    for p in sources where baseline[p] == nil {
+      if mtime(p) != builtStamps[p] { stale = p; continue }
+      baseline[p] = try? String(contentsOfFile: p, encoding: .utf8)
+    }
+    scope = WatchScope(modules: modules, sources: sources, root: standardized(options.workspace.root))
+    return stale.map { "\(($0 as NSString).lastPathComponent) changed since the last build" }
   }
 
   /// Tells the client the platform and, for iOS, which simulators it can pick.
@@ -320,7 +369,11 @@ public final class PreviewSession: @unchecked Sendable {
   public func render(reason: String, allowRebuild: Bool = true) -> Bool {
     do {
       let entry = standardized(options.file)
-      var changed = Set(baseline.keys.filter { (try? String(contentsOfFile: $0, encoding: .utf8)) != baseline[$0] })
+      // Only sources the preview can see, and only those touched since the
+      // build, are read.
+      var changed = Set(scope.sources.filter {
+        mtime($0) != builtStamps[$0] && (try? String(contentsOfFile: $0, encoding: .utf8)) != baseline[$0]
+      })
       changed.insert(entry)
       if moduleBySource[entry] == nil {
         throw ToolError("\(fileKey) is not part of \(options.host)")
@@ -333,7 +386,7 @@ public final class PreviewSession: @unchecked Sendable {
       }
 
       serial += 1
-      let thunkDir = (options.sessionDir as NSString).appendingPathComponent("thunks/\(serial)")
+      let thunkDir = (options.sessionDir as NSString).appendingPathComponent("thunks/\(run)-\(serial)")
       try FileManager.default.createDirectory(atPath: thunkDir, withIntermediateDirectories: true)
 
       var byModule: [String: [String]] = [:]
@@ -382,7 +435,7 @@ public final class PreviewSession: @unchecked Sendable {
       status("rendering", nil)
       seq += 1
       let request = RenderRequest(
-        seq: seq, dylibs: dylibs, file: fileKey, preview: options.preview,
+        run: run, seq: seq, dylibs: dylibs, file: fileKey, preview: options.preview,
         colorScheme: options.colorScheme, width: options.width, height: options.height,
         renderer: options.renderer,
         outputDir: (options.sessionDir as NSString).appendingPathComponent("frames"))
@@ -408,27 +461,33 @@ public final class PreviewSession: @unchecked Sendable {
       e.renderer = response.renderer
       e.rendererMode = options.renderer
       e.rendererReason = response.rendererReason
-      let stripStart = Date()
-      if let png = response.png, let w = response.width, let h = response.height {
-        let dir = (png as NSString).deletingLastPathComponent
-        var source = (png: png, width: w, height: h)
-        // The bezel goes on the pane's strips only: `png`, which agents read,
-        // stays the bare screen.
-        if options.deviceFrame, let type = (host as? SimulatorHost)?.deviceType,
-           let chrome = DeviceChrome.load(deviceType: type) {
-          let framed = (dir as NSString).appendingPathComponent("frame-\(seq)-device.png")
-          if let size = chrome.frame(png: png, pointWidth: w, pointHeight: h, scale: 2, output: framed) {
-            source = (framed, size.width, size.height)
-            e.stripWidth = size.width
+      // Cutting the strips (and the bezel) is the slowest part after the
+      // render: do it off the watch loop, which can start the next compile.
+      // Frames still go out in order.
+      let deviceType = (host as? SimulatorHost)?.deviceType
+      let deviceFrame = options.deviceFrame
+      let frameSeq = seq
+      framing.async { [self, e] in
+        var e = e
+        let stripStart = Date()
+        if let png = response.png, let w = response.width, let h = response.height {
+          let dir = (png as NSString).deletingLastPathComponent
+          // The bezel goes on the pane's strips only: `png`, which agents read,
+          // stays the bare screen. Framed strips are SVG, the bezel as vector
+          // paths, so it stays sharp however the pane scales them.
+          if deviceFrame, let type = deviceType,
+             let chrome = DeviceChrome.load(deviceType: type),
+             let framed = chrome.strips(png: png, pointWidth: w, pointHeight: h, scale: 2, outputDir: dir, name: "frame-\(frameSeq)") {
+            e.strips = framed.strips
+            e.stripWidth = framed.width
+          } else {
+            e.strips = FrameStrips.make(png: png, pointWidth: w, pointHeight: h, outputDir: dir, name: "frame-\(frameSeq)")
           }
         }
-        e.strips = FrameStrips.make(
-          png: source.png, pointWidth: source.width, pointHeight: source.height,
-          outputDir: dir, name: "frame-\(seq)")
+        e.timings = ["compile": compileSeconds, "load": (response.loadMs ?? 0) / 1000, "render": (response.renderMs ?? 0) / 1000,
+                    "strips": Date().timeIntervalSince(stripStart)]
+        emit(e)
       }
-      e.timings = ["compile": compileSeconds, "load": (response.loadMs ?? 0) / 1000, "render": (response.renderMs ?? 0) / 1000,
-                  "strips": Date().timeIntervalSince(stripStart)]
-      emit(e)
       return true
     } catch let error as CompileError {
       if allowRebuild, Self.isStaleBuildError(error.summary) {
@@ -458,7 +517,7 @@ public final class PreviewSession: @unchecked Sendable {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       if let data = FileManager.default.contents(atPath: responsePath),
-         let r = try? JSONDecoder().decode(RenderResponse.self, from: data), r.seq == seq {
+         let r = try? JSONDecoder().decode(RenderResponse.self, from: data), r.seq == seq, r.run == nil || r.run == run {
         return r
       }
       if let host, !host.isRunning {
@@ -479,6 +538,10 @@ public final class PreviewSession: @unchecked Sendable {
     try? FileManager.default.removeItem(atPath: controlPath)
     try? FileManager.default.removeItem(atPath: inboxDir)
     try? FileManager.default.createDirectory(atPath: options.sessionDir, withIntermediateDirectories: true)
+    // Earlier runs' thunks: a host kept warm has its dylibs loaded already.
+    try? FileManager.default.removeItem(atPath: (options.sessionDir as NSString).appendingPathComponent("thunks"))
+    let heartbeat = startHeartbeat()
+    defer { heartbeat.cancel() }
     eventLog = EventLog(sessionDir: options.sessionDir)
     live = LiveSession(
       pid: getpid(), workspace: options.workspace.root, host: options.host,
@@ -492,28 +555,64 @@ public final class PreviewSession: @unchecked Sendable {
       emit(Event(event: "error", phase: "building", message: "\(error)"))
     }
     publish()
+    // Once this run ends, shut down simulators it booted that stay idle.
+    if options.platform == "ios", options.simulatorIdleSeconds > 0, let me = Bundle.main.executablePath {
+      SimulatorReaper.scheduleAfter(pid: getpid(), idle: options.simulatorIdleSeconds, executable: me)
+    }
     if compiler != nil { render(reason: "initial") }
-    status("watching", "watching \(moduleBySource.count) source files")
+    status("watching", watchSummary)
 
     var pendingSince: Date?
+    var pending = Set<String>()
+    var watcher: ChangeWatcher?
+    var lastPoll = Date.distantPast
     while true {
       for command in commands.drain() + readControlFile() + readInbox() {
         if handle(command) { return }
       }
       if compiler == nil { usleep(250_000); continue }
-      var dirty = false
-      for path in moduleBySource.keys {
-        let m = mtime(path)
-        if m != mtimes[path] { mtimes[path] = m; dirty = true }
+      let useEvents = options.watch == "events" || (options.watch == "auto" && scope.sources.count > options.eventsThreshold)
+      if useEvents {
+        if !(watcher is SourceWatcher) || watcher?.scope != scope {
+          watcher = SourceWatcher(scope: scope)
+          if watcher == nil { options.watch = "poll" }  // FSEvents unavailable: poll instead
+        }
+      } else if !(watcher is PollWatcher) || watcher?.scope != scope {
+        watcher = PollWatcher(scope: scope, built: builtStamps)
       }
-      if dirty { pendingSince = Date() }
+      if useEvents || Date().timeIntervalSince(lastPoll) >= options.pollInterval {
+        lastPoll = Date()
+        let paths = watcher?.takeChanges() ?? []
+        if !paths.isEmpty { pending.formUnion(paths); pendingSince = Date() }
+      }
       if let since = pendingSince, Date().timeIntervalSince(since) > 0.12 {
+        let change = scope.classify(pending)
         pendingSince = nil
-        render(reason: "hot")
-        status("watching", nil)
+        pending = []
+        switch change {
+        case .none: break
+        case .sources:
+          render(reason: "hot")
+          status("watching", nil)
+        case .structure(let why):
+          // A source added or removed, or a BUILD file: the modules may be
+          // different. Query and build again (Bazel skips what is current).
+          status("rebuilding", why)
+          do {
+            try fullBuild()
+            render(reason: "rebuild")
+          } catch {
+            emit(Event(event: "error", phase: "building", message: "\(error)"))
+          }
+          status("watching", watchSummary)
+        }
       }
       usleep(120_000)
     }
+  }
+
+  var watchSummary: String {
+    "watching \(scope.sources.count) source files in \(scope.modules.count) module(s)"
   }
 
   /// Returns true to quit.
@@ -521,7 +620,8 @@ public final class PreviewSession: @unchecked Sendable {
     switch c.cmd {
     case "quit":
       try? FileManager.default.removeItem(atPath: controlPath)
-      host?.terminate()
+      finishFrames()
+      keepHostWarm()
       emit(Event(event: "exit"))
       return true
     case "select":
@@ -533,7 +633,11 @@ public final class PreviewSession: @unchecked Sendable {
         options.preview = c.preview ?? 0
         if moduleBySource[options.file] == nil {
           do { try fullBuild() } catch { emit(Event(event: "error", phase: "building", message: "\(error)")); return false }
+        } else if let why = updateScope() {
+          status("rebuilding", why)
+          do { try fullBuild() } catch { emit(Event(event: "error", phase: "building", message: "\(error)")); return false }
         }
+        status("watching", watchSummary)
         publish()
         render(reason: "open")
       }
@@ -611,6 +715,43 @@ public final class PreviewSession: @unchecked Sendable {
   }
 
   public func shutdown() { host?.terminate() }
+
+  /// Ends this run leaving an iOS host running for `keepHostSeconds` (see
+  /// `SimulatorHost.keepWarm`); otherwise stops it.
+  public func keepHostWarm() {
+    if let sim = host as? SimulatorHost, options.keepHostSeconds > 0 {
+      sim.keepWarm(seconds: options.keepHostSeconds)
+      touch(heartbeatPath)  // the deadline counts from now
+    } else {
+      host?.terminate()
+    }
+  }
+
+  var heartbeatPath: String { (options.sessionDir as NSString).appendingPathComponent("serve.alive") }
+  /// The simulator this run's host is on, for the heartbeat.
+  let deviceInUse = Locked<String?>(nil)
+
+  func touch(_ path: String) {
+    if !FileManager.default.createFile(atPath: path, contents: nil) {
+      try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
+    }
+  }
+
+  /// Says this run is alive (`serve.alive`, which the host watches) and that
+  /// its simulator is in use, every 2 s, whatever the watch loop is doing.
+  func startHeartbeat() -> DispatchSourceTimer {
+    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "swiftpreview.heartbeat"))
+    timer.schedule(deadline: .now(), repeating: 2)
+    timer.setEventHandler { [self] in
+      touch(heartbeatPath)
+      if let udid = deviceInUse.withLock({ $0 }) { SimulatorReaper.touch(udid) }
+    }
+    timer.resume()
+    return timer
+  }
+
+  /// Waits for frames still being cut into strips to go out.
+  public func finishFrames() { framing.sync {} }
 }
 
 func standardized(_ path: String) -> String {

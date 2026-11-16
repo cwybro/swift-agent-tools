@@ -76,6 +76,17 @@ tools/swiftpreview/.build/release/swiftpreview snapshot examples/macos_clt/Views
 tools/swiftpreview/.build/release/swiftpreview serve path/to/View.swift
 ```
 
+```bash
+tools/swiftpreview/.build/release/swiftpreview discover examples/ios
+```
+
+`discover` lists every preview the workspace can render, as JSON: the
+`swiftui_preview_host` targets, the workspace Swift files each one builds, and
+the `#Preview` / `PreviewProvider` entries in each file (index, name, line).
+It also searches Bazel workspaces nested below the folder, so
+`swiftpreview discover .` at this repository's root lists every example. It
+runs Bazel queries only, no build: about a second per workspace.
+
 `serve` prints JSON Lines events and reads commands on stdin:
 `{"cmd":"select","preview":1}`, `{"cmd":"scheme","value":"dark"}`,
 `{"cmd":"open","file":"…"}`, `{"cmd":"renderer","value":"window"}`,
@@ -98,6 +109,7 @@ is a Model Context Protocol server on stdio with three tools:
 |---|---|
 | `swiftui_preview` | Renders a preview and returns the PNG (inline image plus its path), or the compiler errors at your file and line. Takes `file`, `preview`, `colorScheme`, `device`, `renderer`, `host`. |
 | `swiftui_preview_list` | Lists the previews in a file, no build needed. |
+| `swiftui_preview_discover` | Lists every preview in the workspace, by file, with no build (`swiftpreview discover`). |
 | `swiftui_preview_devices` | Lists the iOS simulators, the default pick first. |
 
 When a preview is running for the same workspace (`swiftpreview serve`, for
@@ -135,7 +147,20 @@ claude --plugin-dir integrations/claude-code/swiftui-previews
 - `/preview path/to/View.swift [n]` opens the **SwiftUI Preview** pane. It
   hot reloads on every save (yours or Claude's) and has buttons for each
   preview, Light/Dark, Rebuild and Stop. You can also run `/preview dark`,
-  `/preview rebuild` and `/preview stop`.
+  `/preview rebuild` and `/preview stop`; they act on the tab that's shown.
+- The **Preview** picker lists the open file's previews. **Find previews in
+  the workspace** (or `/preview list [folder]`) runs `swiftpreview discover`
+  on the project folder, Bazel queries with no build, and the picker then
+  lists every preview there. Turn on the `discoverPreviews` option to search
+  each time a preview starts. Picking one shows it in this
+  tab, in about a second when the same host builds it. **Open in new tab**
+  (or `/preview new path/to/View.swift`) opens another tab with its own
+  `swiftpreview serve`. A new iOS tab picks a simulator no other tab uses,
+  since two previews on one simulator would stop each other's host app.
+  Closing a tab stops its preview.
+- Click the file name to open the source at the selected preview's line. The
+  plugin's `editor` option picks the app: `xcode` (default, `xed`), `vscode`,
+  `cursor`, or `default` (whatever opens `.swift` files).
 - The pane shows which renderer drew each frame and lets you pick one
   (`/preview renderer auto|swiftui|window`, or `--renderer` on the CLI). This applies to macOS hosts; the iOS
   host always snapshots the window.
@@ -164,6 +189,33 @@ claude --plugin-dir integrations/claude-code/swiftui-previews
 - The plugin starts `swiftpreview mcp`, so Claude gets the `swiftui_preview`
   tools above and sees the frame it rendered, through the pane's session when
   one runs.
+
+### Settings
+
+Set these in the plugin's options. Each maps to a `swiftpreview serve` flag.
+
+| Option | Default | What it does | CLI flag |
+|---|---|---|---|
+| `discoverPreviews` | off | Search the workspace for previews each time a preview starts, for the pickers. Off: the pane's button or `/preview list` does it. | (plugin only) |
+| `keepHostMinutes` | 10 | After a preview stops, keep its iOS host app running this long. Starting again in the same tab then skips installing and launching it. 0 stops it with the preview. | `--keep-host <seconds>` |
+| `simulatorIdleMinutes` | 15 | Shut down a simulator swiftpreview booted once nothing has used it this long. Simulators you booted are never shut down. 0 leaves them booted. | `--simulator-idle <seconds>` |
+| `watch` | auto | How saves are noticed. `poll` checks each source file's modification time every poll interval. `events` uses macOS file events (FSEvents). `auto` polls up to `watchEventsAbove` files, else uses events. | `--watch auto\|poll\|events` |
+| `pollIntervalMs` | 120 | How often polling checks the sources. | `--poll-interval <ms>` |
+| `watchEventsAbove` | 200 | With `auto`: the most files to poll before switching to file events. | `--events-above <n>` |
+
+**What's watched:** only what the preview can reach.
+
+- **Sources:** those of the previewed file's module and the modules it imports, directly or not. This comes from the compile commands' search paths and module maps, so it needs no extra Bazel query. Modules that import the previewed one, and the rest of the host, aren't watched.
+- **Packages:** the BUILD files of those modules' packages, and `.swift` files added to or removed from those packages. Either change re-queries the modules and rebuilds; Bazel skips what's current.
+- **Opening another file:** the watched set is recomputed when you open a file in another module. A newly watched file that changed since the last build triggers a rebuild first.
+
+Some speedups need no setting:
+
+- **Install:** an iOS host app is installed again only when its build
+  changed.
+- **Bezel:** the device bezel is built once per device and size.
+- **Strips:** frames are cut into the pane's strips off the watch loop, so the
+  next compile can start meanwhile.
 
 The plugin's `swiftpreviewPath` option points at the CLI. It defaults to
 `swiftpreview` on your `PATH`; set it to
@@ -196,6 +248,12 @@ Tests:
 
 ```bash
 cd tools/swiftpreview && swift test
+```
+
+End to end: builds a real four-module Bazel workspace and drives `swiftpreview serve` through edits at each layer, an unwatched module, a stored property, added and removed files and a BUILD edit, in both watch modes. It takes about a minute once the workspace is cached (see `tools/swiftpreview/Tests/SwiftPreviewE2ETests`):
+
+```bash
+cd tools/swiftpreview && swift build && SWIFTPREVIEW_E2E=1 swift test --filter SwiftPreviewE2ETests
 ```
 
 With only the Command Line Tools, add

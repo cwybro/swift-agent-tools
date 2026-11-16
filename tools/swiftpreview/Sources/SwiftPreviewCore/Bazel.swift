@@ -16,6 +16,9 @@ public struct ModuleCompile: Codable, Sendable {
   public var target: String
   public var environment: [String: String]
   public var configuration: String
+  /// Explicit module builds: the JSON map of the modules it imports, relative
+  /// to the execroot (its search paths, `-I`, are in `flags`).
+  public var moduleMapFile: String? = nil
 }
 
 public enum ArgumentCleaner {
@@ -55,6 +58,7 @@ public enum ArgumentCleaner {
     public var moduleName: String?
     public var moduleDir: String?
     public var target: String?
+    public var moduleMapFile: String? = nil
   }
 
   /// `arguments` is the full action command line: the worker, `swiftc`, flags.
@@ -82,6 +86,7 @@ public enum ArgumentCleaner {
     var moduleName: String?
     var moduleDir: String?
     var target: String?
+    var moduleMapFile: String?
     var i = 0
     func value(_ at: Int) -> String? { at < args.count ? args[at] : nil }
     while i < args.count {
@@ -93,6 +98,10 @@ public enum ArgumentCleaner {
         i += 2; continue
       }
       if a == "-target", let v = value(i + 1) { target = v }
+      if a == "-explicit-swift-module-map-file" { moduleMapFile = value(i + 1) }
+      if a == "-Xfrontend", value(i + 1) == "-explicit-swift-module-map-file" {
+        moduleMapFile = value(i + 2) == "-Xfrontend" ? value(i + 3) : value(i + 2)
+      }
       if dropFlags.contains(a) { i += 1; continue }
       if dropFlagsWithValue.contains(a) { i += 2; continue }
       if a == "-Xfrontend", let f = value(i + 1) {
@@ -113,7 +122,9 @@ public enum ArgumentCleaner {
       flags.append(a)
       i += 1
     }
-    return Result(swiftc: swiftc, flags: flags, sources: sources, moduleName: moduleName, moduleDir: moduleDir, target: target)
+    return Result(
+      swiftc: swiftc, flags: flags, sources: sources, moduleName: moduleName, moduleDir: moduleDir, target: target,
+      moduleMapFile: moduleMapFile)
   }
 }
 
@@ -158,7 +169,8 @@ public enum AQuery {
       for kv in action.environmentVariables ?? [] { env[kv.key] = kv.value ?? "" }
       let compile = ModuleCompile(
         moduleName: name, swiftc: cleaned.swiftc, flags: cleaned.flags, sources: cleaned.sources,
-        moduleDir: cleaned.moduleDir, target: cleaned.target ?? "", environment: env, configuration: configName)
+        moduleDir: cleaned.moduleDir, target: cleaned.target ?? "", environment: env, configuration: configName,
+        moduleMapFile: cleaned.moduleMapFile)
       if let existing = byModule[name], existing.score >= score { continue }
       byModule[name] = (score, compile)
     }

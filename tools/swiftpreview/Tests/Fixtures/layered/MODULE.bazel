@@ -1,0 +1,8 @@
+module(name = "swiftpreview_e2e_layered")
+
+# The end-to-end tests copy this workspace elsewhere and fill in the path.
+bazel_dep(name = "rules_swiftui_previews", version = "0")
+local_path_override(module_name = "rules_swiftui_previews", path = "@RULES_SWIFTUI_PREVIEWS@")
+
+bazel_dep(name = "rules_swift", version = "4.2.2")
+bazel_dep(name = "apple_support", version = "2.9.1")

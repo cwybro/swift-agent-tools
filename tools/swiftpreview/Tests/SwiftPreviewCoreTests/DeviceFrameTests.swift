@@ -64,3 +64,110 @@ func framesAnIPhoneScreenInItsBezel() throws {
 @Test func unknownDeviceTypesHaveNoChrome() {
   #expect(DeviceChrome.load(deviceType: "com.example.NoSuchDevice") == nil)
 }
+
+@Test func discoveryMapsSourceLabelsToPaths() {
+  let ws = BazelWorkspace(root: "/ws", bazel: "bazel")
+  #expect(ws.path(ofLabel: "//Features/Profile:ProfileView.swift") == "/ws/Features/Profile/ProfileView.swift")
+  #expect(ws.path(ofLabel: "//:App.swift") == "/ws/App.swift")
+  #expect(ws.path(ofLabel: "//Views:Sub/Card.swift") == "/ws/Views/Sub/Card.swift")
+  #expect(ws.path(ofLabel: "@rules_swift//x:y.swift") == nil)
+}
+
+@Test(.enabled(if: FileManager.default.fileExists(atPath: "/Library/Developer/DeviceKit/Chrome/phone11.devicechrome")))
+func cutsAFramedScreenIntoVectorSVGStrips() throws {
+  let chrome = try #require(DeviceChrome.load(deviceType: "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro"))
+  let dir = ProcessInfo.processInfo.environment["SWIFTPREVIEW_STRIPS_OUT"] ?? NSTemporaryDirectory() + "device-strips-\(getpid())"
+  try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+  let screen = dir + "/screen.png"
+  writeScreen(to: screen, color: CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+
+  let (strips, width) = try #require(chrome.strips(png: screen, pointWidth: 402, pointHeight: 874, scale: 2, outputDir: dir, name: "frame-1"))
+  let v = chrome.vector(pointWidth: 402, pointHeight: 874)
+  #expect(abs(width - Double(v.size.width)) < 0.001)
+  #expect(width > 402 + 36)
+  // The slices cover the whole device, top to bottom.
+  #expect(abs(strips.reduce(0) { $0 + $1.height } - v.size.height) < 0.01)
+  for s in strips {
+    #expect(s.format == "svg")
+    let svg = try String(contentsOfFile: s.path, encoding: .utf8)
+    // Each fits the pane's SVG element.
+    #expect(svg.count <= 131_072)
+    #expect(svg.hasPrefix("<svg"))
+    // The bezel is vector paths, and the screen's slice an embedded image.
+    // (stretched pieces are their cross-section: rects).
+    #expect(svg.contains("<path") || svg.contains("<rect"))
+    #expect(svg.contains("<image"))
+  }
+  // Each screen image runs past its slice's inner edges, so no image edge falls
+  // on a slice boundary (a hairline at fractional zoom).
+  var top = 0.0
+  for (k, s) in strips.enumerated() {
+    let svg = try String(contentsOfFile: s.path, encoding: .utf8)
+    let image = try #require(svg.range(of: "<image ").map { String(svg[$0.upperBound...].prefix(200)) })
+    func attr(_ name: String) -> Double? {
+      image.range(of: "\(name)=\"").flatMap { r in Double(image[r.upperBound...].prefix { $0 != "\"" }) }
+    }
+    let y = try #require(attr("y")), h = try #require(attr("height"))
+    if k > 0 { #expect(y < top, "image starts above slice \(k)") }
+    if k < strips.count - 1 { #expect(y + h > top + s.height, "image ends below slice \(k)") }
+    top += s.height
+  }
+  // The masked screen fills its whole layer: opaque red toward every edge, not
+  // just the bottom-left quarter.
+  let masked = try #require(CGImageSourceCreateWithURL(URL(fileURLWithPath: dir + "/frame-1-screen.png") as CFURL, nil)
+    .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+  #expect(masked.width == 804 && masked.height == 1748)
+  let ctx = try #require(CGContext(
+    data: nil, width: masked.width, height: masked.height, bitsPerComponent: 8, bytesPerRow: masked.width * 4,
+    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+  ctx.draw(masked, in: CGRect(x: 0, y: 0, width: masked.width, height: masked.height))
+  let px = try #require(ctx.data).assumingMemoryBound(to: UInt8.self)
+  for (fx, fy) in [(0.9, 0.1), (0.1, 0.9), (0.9, 0.9), (0.5, 0.5)] {
+    let i = (Int(fy * Double(masked.height)) * masked.width + Int(fx * Double(masked.width))) * 4
+    #expect(px[i] > 200 && px[i + 3] > 200, "screen pixel at \(fx),\(fy)")
+  }
+  // The whole frame stays well within the pane's frame budget, at 2x.
+  let total = try strips.reduce(0) { $0 + (try String(contentsOfFile: $1.path, encoding: .utf8)).count }
+  #expect(total < FrameStrips.frameBudget / 2, "\(total) characters")
+  // The Dynamic Island is drawn over the screen, as a vector shape.
+  #expect(v.over.contains { $0.svg.contains("<rect") })
+  #expect(chrome.strips(png: screen, pointWidth: 402, pointHeight: 300, scale: 2, outputDir: dir, name: "compact") == nil)
+}
+
+@Test("a busy screen's framed strips together stay within the pane's frame budget")
+func keepsABusyFrameWithinTheFrameBudget() throws {
+  let chrome = try #require(DeviceChrome.load(deviceType: "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro"))
+  let dir = NSTemporaryDirectory() + "device-busy-\(getpid())"
+  try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+  // Coloured 4 pt tiles: PNG compresses them poorly, as it does a busy UI.
+  let ctx = try #require(CGContext(
+    data: nil, width: 1206, height: 2622, bitsPerComponent: 8, bytesPerRow: 0,
+    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+  var seed: UInt64 = 42
+  for ty in stride(from: 0, to: 2622, by: 12) {
+    for tx in stride(from: 0, to: 1206, by: 12) {
+      seed = seed &* 6364136223846793005 &+ 1442695040888963407
+      let v = Double(seed >> 40 & 0xFF) / 255
+      ctx.setFillColor(CGColor(red: v, green: 1 - v, blue: 0.5, alpha: 1))
+      ctx.fill(CGRect(x: tx, y: ty, width: 12, height: 12))
+    }
+  }
+  let screen = dir + "/busy.png"
+  let dest = try #require(CGImageDestinationCreateWithURL(URL(fileURLWithPath: screen) as CFURL, UTType.png.identifier as CFString, 1, nil))
+  CGImageDestinationAddImage(dest, try #require(ctx.makeImage()), nil)
+  #expect(CGImageDestinationFinalize(dest))
+
+  let (strips, _) = try #require(chrome.strips(png: screen, pointWidth: 402, pointHeight: 874, scale: 2, outputDir: dir, name: "busy"))
+  let svgs = try strips.map { try String(contentsOfFile: $0.path, encoding: .utf8) }
+  let total = svgs.reduce(0) { $0 + $1.count }
+  #expect(total <= FrameStrips.frameBudget, "\(total) characters")
+  // One format for the whole frame: no strip looks different from the next.
+  let formats = Set(svgs.compactMap { svg in svg.range(of: "data:image/").map { String(svg[$0.upperBound...].prefix { $0 != ";" }) } })
+  #expect(formats.count == 1, "\(formats)")
+  let raster = FrameStrips.make(png: screen, pointWidth: 402, pointHeight: 874, outputDir: dir, name: "flat")
+  let rasterTotal = raster.reduce(0) { total, s in
+    total + 400 + ((try? FileManager.default.attributesOfItem(atPath: s.path)[.size] as? Int) ?? 0) * 4 / 3
+  }
+  #expect(rasterTotal <= FrameStrips.frameBudget, "\(rasterTotal) characters")
+  #expect(Set(raster.map(\.format)).count == 1)
+}

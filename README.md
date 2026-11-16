@@ -55,7 +55,7 @@ config, with `/path/to/swift-agent-tools` replaced by this checkout's path:
 
 | Server | Command | Tools |
 |---|---|---|
-| `swiftpreview` | `tools/swiftpreview/.build/release/swiftpreview mcp` | `swiftui_preview`, `swiftui_preview_list`, `swiftui_preview_devices` |
+| `swiftpreview` | `tools/swiftpreview/.build/release/swiftpreview mcp` | `swiftui_preview`, `swiftui_preview_discover`, `swiftui_preview_list`, `swiftui_preview_devices` |
 | `swiftdbg` | `python3 tools/swiftdbg/server.py` | `debug_set_breakpoints`, `debug_launch`, `debug_attach`, `debug_step`, `debug_continue`, `debug_variables`, `debug_evaluate`, … |
 
 `swiftui_preview` returns the rendered PNG inline, so the agent sees the UI
@@ -74,8 +74,11 @@ viewer at http://localhost:7311 (set `SWIFTDBG_PORT` to change it).
 
 - **swiftui-previews**: `/preview path/to/View.swift` opens a pane that hot
   reloads on every save, with buttons for each preview, light and dark, the
-  iOS simulator and Rebuild. Set the plugin's `swiftpreviewPath` option to the
-  CLI you built, unless `swiftpreview` is on your `PATH`.
+  iOS simulator and Rebuild. It lists every preview in the workspace, so you
+  can switch to one or open it in a new tab (`/preview new File.swift`), and
+  the file name opens the source in Xcode, VS Code or Cursor. Set the plugin's
+  `swiftpreviewPath` option to the CLI you built, unless `swiftpreview` is on
+  your `PATH`.
 - **swiftdbg-pane**: the pane opens when Claude starts a debug session. It
   shows the source with breakpoints, the call stack and variables, with
   Continue and Step buttons. `/swiftdbg` opens it, and `/swiftdbg break
@@ -100,6 +103,12 @@ claude --plugin-dir integrations/claude-code/swiftui-previews --plugin-dir integ
 
 ```bash
 cd tools/swiftpreview && swift test
+```
+
+End to end: builds a real four-module Bazel workspace and drives `swiftpreview serve` through edits at each layer, an unwatched module, a stored property, added and removed files and a BUILD edit, in both watch modes. It takes about a minute once the workspace is cached (see `tools/swiftpreview/Tests/SwiftPreviewE2ETests`):
+
+```bash
+cd tools/swiftpreview && swift build && SWIFTPREVIEW_E2E=1 swift test --filter SwiftPreviewE2ETests
 ```
 
 ```bash

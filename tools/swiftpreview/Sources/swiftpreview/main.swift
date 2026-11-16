@@ -7,6 +7,11 @@ let usage = """
   USAGE
     swiftpreview list <file.swift>
         Print the #Preview / PreviewProvider entries in a file as JSON.
+    swiftpreview discover [<dir>]
+        Print every preview the workspace can render as JSON: the
+        swiftui_preview_host targets, the Swift files they build, and the
+        previews in each. Also searches Bazel workspaces nested below <dir>.
+        Bazel queries only, no build.
     swiftpreview devices
         Print the available iOS simulators as JSON, default pick first.
     swiftpreview thunk <file.swift> --module <Name> [--baseline <old.swift>]
@@ -20,6 +25,10 @@ let usage = """
         {"cmd":"rebuild"}, {"cmd":"quit"}).
     swiftpreview snapshot <file.swift> [options] [--out <file.png>]
         Build, render once, print the frame event and exit.
+    swiftpreview reap-simulators [--idle <seconds>] [--after-pid <pid>]
+        Shut down the simulators swiftpreview booted that nothing has used
+        for --idle seconds (default 900). With --after-pid, first wait for
+        that process to exit, then for --idle. `serve` starts one of these.
     swiftpreview mcp
         Run a Model Context Protocol server on stdio (tools swiftui_preview,
         swiftui_preview_list, swiftui_preview_devices). Renders go through a
@@ -42,6 +51,20 @@ let usage = """
     --session <dir>       Session directory (default <workspace>/.swiftpreview/session)
     --bazel <path>        Bazel binary (default: bazelisk, else bazel)
     --width/--height <pt> Render size override
+    --keep-host <seconds> iOS: leave the host app running this long after
+                          serve stops, so the next run in the same session
+                          folder skips installing and launching it (default
+                          600; 0 stops it with serve)
+    --simulator-idle <seconds>
+                          iOS: shut down a simulator swiftpreview booted once
+                          no run has used it this long (default 900; 0 never)
+    --watch auto|poll|events
+                          How serve notices saves: poll checks each source
+                          file's modification time every --poll-interval;
+                          events uses FSEvents; auto (default) polls up to
+                          --events-above files, else uses events
+    --poll-interval <ms>  Default 120
+    --events-above <n>    Default 200
 
   CONFIGURATION
     None. The host is found from the file, the platform and a default
@@ -92,9 +115,27 @@ func emitLine(_ e: Event) {
 }
 
 switch verb {
+case "reap-simulators":
+  let idle = Double(flags["idle"] ?? "900") ?? 900
+  if let pid = flags["after-pid"].flatMap(Int32.init) {
+    while kill(pid, 0) == 0 || errno == EPERM { sleep(2) }
+    sleep(UInt32(max(0, idle)) + 5)
+  }
+  let done = SimulatorReaper.reap(idle: idle)
+  if let data = try? JSONEncoder().encode(done) { print(String(decoding: data, as: UTF8.self)) }
+  exit(0)
+
 case "mcp":
   let me = Bundle.main.executablePath ?? CommandLine.arguments[0]
   MCPServer(executable: me).run()
+case "discover":
+  let start = (positional.first.map(absolute) ?? FileManager.default.currentDirectoryPath as String)
+  let dir = (start as NSString).standardizingPath
+  let found = Discovery.find(from: dir, bazel: flags["bazel"] ?? BazelWorkspace.preferredBazel())
+  if found.workspaces.isEmpty { fail("no Bazel workspace (MODULE.bazel / WORKSPACE) at, above or below \(dir)") }
+  let enc = JSONEncoder()
+  enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+  print(String(decoding: (try? enc.encode(found)) ?? Data(), as: UTF8.self))
 case "devices":
   do {
     let all = try SimDevice.available()
@@ -132,10 +173,7 @@ case "serve", "snapshot":
   guard let root = flags["workspace"].map(absolute) ?? BazelWorkspace.findRoot(from: file) else {
     fail("no Bazel workspace (MODULE.bazel / WORKSPACE) above \(file)")
   }
-  let bazel = flags["bazel"] ?? {
-    let r = try? Shell.run(["which", "bazelisk"])
-    return r?.status == 0 ? "bazelisk" : "bazel"
-  }()
+  let bazel = flags["bazel"] ?? BazelWorkspace.preferredBazel()
   let workspace = BazelWorkspace(root: root, bazel: bazel)
   var host = flags["host"]
   if host == nil {
@@ -165,6 +203,14 @@ case "serve", "snapshot":
   options.deviceFrame = flags["frame"] != "none"
   options.width = flags["width"].flatMap(Double.init)
   options.height = flags["height"].flatMap(Double.init)
+  if let v = flags["keep-host"].flatMap(Double.init) { options.keepHostSeconds = max(0, v) }
+  if let v = flags["simulator-idle"].flatMap(Double.init) { options.simulatorIdleSeconds = max(0, v) }
+  if let v = flags["watch"] {
+    guard ["auto", "poll", "events"].contains(v) else { fail("--watch is auto, poll or events") }
+    options.watch = v
+  }
+  if let v = flags["poll-interval"].flatMap(Double.init) { options.pollInterval = max(20, v) / 1000 }
+  if let v = flags["events-above"].flatMap(Int.init) { options.eventsThreshold = max(0, v) }
 
   if verb == "snapshot" {
     let session = PreviewSession(options: options) { e in
@@ -176,7 +222,8 @@ case "serve", "snapshot":
       try session.fullBuild()
     } catch { fail("\(error)") }
     let ok = session.render(reason: "snapshot")
-    if session.options.platform == "macos" { session.shutdown() }
+    session.finishFrames()
+    if session.options.platform == "macos" { session.shutdown() } else { session.keepHostWarm() }
     exit(ok ? 0 : 1)
   }
 

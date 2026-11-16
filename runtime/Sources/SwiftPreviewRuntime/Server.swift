@@ -9,6 +9,9 @@ import AppKit
 
 // Mirrors RenderRequest / RenderResponse in tools/swiftpreview (Host.swift).
 struct RenderRequest: Codable {
+  /// Which swiftpreview run sent it: a host kept warm between runs sees
+  /// numbering start again.
+  var run: String?
   var seq: Int
   var dylibs: [String]
   var file: String
@@ -22,6 +25,7 @@ struct RenderRequest: Codable {
 
 struct RenderResponse: Codable {
   struct Preview: Codable { var name: String; var line: Int }
+  var run: String?
   var seq: Int
   var ok: Bool
   var error: String?
@@ -55,7 +59,8 @@ public final class PreviewServer {
   public static let shared = PreviewServer()
 
   let sessionDir: String?
-  var lastRequestSeq = -1
+  var lastRequest = ""
+  var lastLifeCheck = Date.distantPast
   var loaded: [String: UnsafeMutableRawPointer] = [:]
   var timer: Timer?
   /// The display: set by the platform host.
@@ -83,17 +88,42 @@ public final class PreviewServer {
     // swiftpreview started this process; when it goes, so does the host.
     if getppid() == 1 { exit(0) }
     #endif
+    if Date().timeIntervalSince(lastLifeCheck) >= 1 {
+      lastLifeCheck = Date()
+      checkLife()
+    }
     guard let dir = sessionDir,
           let data = FileManager.default.contents(atPath: dir + "/request.json"),
           let request = try? JSONDecoder().decode(RenderRequest.self, from: data),
-          request.seq != lastRequestSeq
+          "\(request.run ?? ""):\(request.seq)" != lastRequest
     else { return }
-    lastRequestSeq = request.seq
+    lastRequest = "\(request.run ?? ""):\(request.seq)"
     handle(request)
   }
 
+  /// Says this host is up (`host.alive`), and exits once nothing wants it:
+  /// no swiftpreview heartbeat (`serve.alive`) for 10 s and no `keep-until`
+  /// deadline ahead. A host whose serve stopped stays warm until that
+  /// deadline, so the next run in the same folder skips the launch.
+  func checkLife() {
+    guard let dir = sessionDir else { return }
+    let fm = FileManager.default
+    fm.createFile(atPath: dir + "/host.alive", contents: Data("\(getpid())".utf8))
+    func age(_ name: String) -> TimeInterval? {
+      (try? fm.attributesOfItem(atPath: dir + "/" + name)[.modificationDate] as? Date).map { Date().timeIntervalSince($0) }
+    }
+    // Older swiftpreview runs write no heartbeat: then never exit on our own.
+    guard let served = age("serve.alive") else { return }
+    if served < 10 { return }
+    if let text = fm.contents(atPath: dir + "/keep-until").flatMap({ String(data: $0, encoding: .utf8) }),
+       let until = Double(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+       Date().timeIntervalSince1970 < until { return }
+    try? fm.removeItem(atPath: dir + "/host.alive")
+    exit(0)
+  }
+
   func handle(_ request: RenderRequest) {
-    var response = RenderResponse(seq: request.seq, ok: false)
+    var response = RenderResponse(run: request.run, seq: request.seq, ok: false)
     let loadStart = Date()
     for path in request.dylibs where loaded[path] == nil {
       guard let handle = dlopen(path, RTLD_NOW) else {

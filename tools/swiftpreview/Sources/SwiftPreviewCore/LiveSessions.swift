@@ -59,17 +59,19 @@ public struct LiveSession: Codable, Sendable {
   /// session started under that agent (its pane) comes first; else one that
   /// no running agent started, such as a person's `swiftpreview serve` in a
   /// terminal. Another agent's session is never picked, so two chats in one
-  /// workspace each render in their own pane. The newest wins a tie.
-  public static func find(workspace: String, host: String? = nil, owner: Int32? = nil) -> LiveSession? {
+  /// workspace each render in their own pane. Among those, one already
+  /// showing `file` (another tab) wins, then the newest.
+  public static func find(workspace: String, host: String? = nil, owner: Int32? = nil, file: String? = nil) -> LiveSession? {
     let root = (workspace as NSString).standardizingPath
     let here = all().filter { ($0.workspace as NSString).standardizingPath == root && (host == nil || $0.host == host) }
-    if let owner, let mine = here.filter({ $0.ancestors?.contains(owner) == true }).max(by: { $0.pid < $1.pid }) {
+    func best(_ sessions: [LiveSession]) -> LiveSession? {
+      sessions.filter { $0.file == file }.max { $0.pid < $1.pid } ?? sessions.max { $0.pid < $1.pid }
+    }
+    if let owner, let mine = best(here.filter({ $0.ancestors?.contains(owner) == true })) {
       return mine
     }
     let agents = Set(MCPClient.all().map(\.owner))
-    return here
-      .filter { !($0.ancestors ?? []).contains(where: agents.contains) }
-      .max { $0.pid < $1.pid }
+    return best(here.filter { !($0.ancestors ?? []).contains(where: agents.contains) })
   }
 
   /// Queues a command for the session.

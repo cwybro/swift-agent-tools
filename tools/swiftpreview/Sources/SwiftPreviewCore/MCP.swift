@@ -125,6 +125,19 @@ public final class MCPServer {
       ],
     ],
     [
+      "name": "swiftui_preview_discover",
+      "description":
+        "List every SwiftUI preview a Bazel workspace can render: each Swift file with #Preview / PreviewProvider " +
+        "entries that a swiftui_preview_host builds, with the previews' indexes, names and lines. Bazel queries only, " +
+        "no build (about a second).",
+      "inputSchema": [
+        "type": "object",
+        "properties": [
+          "directory": ["type": "string", "description": "A folder: its Bazel workspace and any workspaces nested below it are searched. Default: the server's directory."],
+        ],
+      ],
+    ],
+    [
       "name": "swiftui_preview_devices",
       "description": "List the iOS simulators on this machine, the default pick first.",
       "inputSchema": ["type": "object", "properties": [String: Any]()],
@@ -139,6 +152,23 @@ public final class MCPServer {
       let a = try SourceAnalyzer.analyze(path: absolute(file))
       let lines = a.previews.map { "\($0.index): \($0.displayName) (line \($0.line), \($0.kind.rawValue))" }
       return text(lines.isEmpty ? "No previews in \(file)." : lines.joined(separator: "\n"))
+    case "swiftui_preview_discover":
+      let dir = absolute(args["directory"] as? String ?? ".")
+      let found = Discovery.find(from: dir, bazel: BazelWorkspace.preferredBazel())
+      if found.workspaces.isEmpty { throw ToolError("no Bazel workspace at, above or below \(dir)") }
+      let root = found.workspace
+      if found.hosts.isEmpty {
+        let why = found.failures.map { "\n" + $0.map { "\($0.key): \($0.value)" }.joined(separator: "\n") } ?? ""
+        return text("No swiftui_preview_host targets in \(found.workspaces.joined(separator: ", ")).\(why)")
+      }
+      var lines = ["Preview hosts: \(found.hosts.joined(separator: ", "))"]
+      for f in found.files {
+        let rel = f.file.hasPrefix(root + "/") ? String(f.file.dropFirst(root.count + 1)) : f.file
+        lines.append("\(rel) (\(f.hosts.joined(separator: ", ")))")
+        for p in f.previews { lines.append("  \(p.index): \(p.name) (line \(p.line))") }
+      }
+      if found.files.isEmpty { lines.append("No previews in the files those hosts build.") }
+      return text(lines.joined(separator: "\n"))
     case "swiftui_preview_devices":
       let all = try SimDevice.available()
       var ordered = all
@@ -170,7 +200,7 @@ public final class MCPServer {
     let device = args["device"] as? String
     let host = args["host"] as? String
 
-    if let live = LiveSession.find(workspace: root, host: host, owner: client?.owner) {
+    if let live = LiveSession.find(workspace: root, host: host, owner: client?.owner, file: file) {
       var commands: [Command] = []
       if let device { commands.append(Command(cmd: "device", value: device)) }
       if let renderer { commands.append(Command(cmd: "renderer", value: renderer)) }

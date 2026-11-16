@@ -63,14 +63,37 @@ export type PreviewError = {
   hosts?: string[]
 }
 
+/** One preview a workspace can render, as `swiftpreview discover` lists it. */
+export type CatalogEntry = { file: string; index: number; name: string; line: number; workspace?: string }
+
+/** Every preview in the tab's workspace, found without a build. */
+export type PreviewCatalog = {
+  workspace: string
+  entries: CatalogEntry[]
+  /** Set while discovery runs, or when it failed. */
+  state: 'ready' | 'finding' | 'failed'
+  message?: string
+}
+
+/** One SwiftUI Preview pane (tab): its own `swiftpreview serve` and what it last showed. */
+export type PreviewTab = {
+  session: PreviewSession | null
+  status: PreviewStatus
+  frame: PreviewFrame | null
+  error: PreviewError | null
+  host: PreviewHostInfo | null
+  catalog: PreviewCatalog | null
+  /** Set from starting a run or opening another file until its first frame or error: the last frame is stale. */
+  loading?: boolean
+  /** How large the pane draws the frame, in percent (25, 50, 75 or 100); missing means 100. */
+  zoom?: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'swiftui-previews': {
-      session: Shaped<PreviewSession | null>
-      status: Shaped<PreviewStatus>
-      frame: Shaped<PreviewFrame | null>
-      error: Shaped<PreviewError | null>
-      host: Shaped<PreviewHostInfo | null>
+      /** By pane id: `swiftui-preview`, then `swiftui-preview-2`, … */
+      tabs: Shaped<Record<string, PreviewTab>>
     }
   }
 }

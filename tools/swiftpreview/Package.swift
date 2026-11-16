@@ -18,5 +18,8 @@ let package = Package(
     ),
     .executableTarget(name: "swiftpreview", dependencies: ["SwiftPreviewCore"]),
     .testTarget(name: "SwiftPreviewCoreTests", dependencies: ["SwiftPreviewCore"]),
+    // Builds real Bazel workspaces and drives `swiftpreview serve`: run with
+    // SWIFTPREVIEW_E2E=1 after `swift build` (see Tests/SwiftPreviewE2ETests).
+    .testTarget(name: "SwiftPreviewE2ETests", dependencies: ["SwiftPreviewCore"], exclude: ["README.md"]),
   ]
 )

@@ -9,6 +9,48 @@
       "title": "swiftpreview binary",
       "description": "Path to the swiftpreview CLI (tools/swiftpreview in the swift-agent-tools repo, built with `swift build -c release`). Default: swiftpreview on PATH.",
       "default": "swiftpreview"
+    },
+    "editor": {
+      "type": "string",
+      "title": "Editor",
+      "description": "Where clicking the file name in the pane opens the preview's source: xcode (xed), vscode (code), cursor, or default (the app macOS opens .swift files with).",
+      "default": "xcode"
+    },
+    "discoverPreviews": {
+      "type": "boolean",
+      "title": "Find workspace previews automatically",
+      "description": "List every preview in the Bazel workspace for the pane's pickers each time a preview starts (Bazel queries, no build). Off: the pickers list the open file's previews, and the pane's \"Find previews in the workspace\" button or /preview list runs the search.",
+      "default": false
+    },
+    "keepHostMinutes": {
+      "type": "number",
+      "title": "Keep the iOS host running (minutes)",
+      "description": "After a preview stops, leave its host app running in the simulator this long, so starting again in the same tab skips installing and launching it. 0 stops it at once.",
+      "default": 10
+    },
+    "simulatorIdleMinutes": {
+      "type": "number",
+      "title": "Shut down idle simulators (minutes)",
+      "description": "Shut down a simulator swiftpreview booted once no preview has used it this long. Simulators you booted yourself are never shut down. 0 leaves them booted.",
+      "default": 15
+    },
+    "watch": {
+      "type": "string",
+      "title": "Watching for saves",
+      "description": "poll: check each source file's modification time every poll interval. events: macOS file events (FSEvents). auto: poll up to the file limit below, else events.",
+      "default": "auto"
+    },
+    "pollIntervalMs": {
+      "type": "number",
+      "title": "Poll interval (ms)",
+      "description": "How often polling checks the sources for saves.",
+      "default": 120
+    },
+    "watchEventsAbove": {
+      "type": "number",
+      "title": "Use file events above (files)",
+      "description": "With watching on auto: poll up to this many source files, use file events above it.",
+      "default": 200
     }
   }
 }
