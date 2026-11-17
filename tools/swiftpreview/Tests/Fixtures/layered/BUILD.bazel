@@ -1,4 +1,4 @@
-load("@rules_swiftui_previews//previews:defs.bzl", "swiftui_preview_host")
+load("@swift_agent_tools//previews:defs.bzl", "swiftui_preview_host")
 
 # Layers: Core <- UI <- Profile (the preview). Sibling also imports Core but
 # nothing the preview imports depends on it, so it is linked yet not watched.

@@ -1,7 +1,7 @@
 module(name = "swiftui_previews_macos_example")
 
-bazel_dep(name = "rules_swiftui_previews", version = "0")
-local_path_override(module_name = "rules_swiftui_previews", path = "../..")
+bazel_dep(name = "swift_agent_tools", version = "0")
+local_path_override(module_name = "swift_agent_tools", path = "../..")
 
 # A Command-Line-Tools-only rules_swift (no Xcode needed). With Xcode
 # installed, drop this override and use the released rules_swift.

@@ -1,7 +1,7 @@
 module(name = "swiftui_previews_macos_example")
 
-bazel_dep(name = "rules_swiftui_previews", version = "0")
-local_path_override(module_name = "rules_swiftui_previews", path = "../..")
+bazel_dep(name = "swift_agent_tools", version = "0")
+local_path_override(module_name = "swift_agent_tools", path = "../..")
 
 bazel_dep(name = "rules_swift", version = "4.2.2")
 bazel_dep(name = "apple_support", version = "2.9.1")

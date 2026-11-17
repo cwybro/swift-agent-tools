@@ -1,4 +1,4 @@
-load("@rules_swiftui_previews//previews:defs.bzl", "swiftui_preview_host")
+load("@swift_agent_tools//previews:defs.bzl", "swiftui_preview_host")
 
 # One host can serve every feature library: list them all in deps.
 swiftui_preview_host(

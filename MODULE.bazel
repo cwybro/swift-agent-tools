@@ -1,5 +1,5 @@
 module(
-    name = "rules_swiftui_previews",
+    name = "swift_agent_tools",
     version = "0.1.0",
 )
 

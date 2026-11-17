@@ -21,7 +21,7 @@ func workspace(_ fixture: String, as name: String) throws -> String {
   guard sync.status == 0 else { throw ToolError("rsync failed: \(sync.stderr)") }
   let module = dest + "/MODULE.bazel"
   let text = try String(contentsOfFile: module, encoding: .utf8)
-    .replacingOccurrences(of: "@RULES_SWIFTUI_PREVIEWS@", with: repoRoot.path)
+    .replacingOccurrences(of: "@SWIFT_AGENT_TOOLS@", with: repoRoot.path)
   if text != (try? String(contentsOfFile: module, encoding: .utf8)) { try text.write(toFile: module, atomically: true, encoding: .utf8) }
   return dest
 }

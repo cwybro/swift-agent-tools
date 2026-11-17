@@ -23,14 +23,14 @@ examples/ios/                               rules_apple simulator host (Xcode)
 `MODULE.bazel`:
 
 ```starlark
-bazel_dep(name = "rules_swiftui_previews", version = "0")
-local_path_override(module_name = "rules_swiftui_previews", path = "path/to/swift-agent-tools")
+bazel_dep(name = "swift_agent_tools", version = "0")
+local_path_override(module_name = "swift_agent_tools", path = "path/to/swift-agent-tools")
 ```
 
 `BUILD.bazel`:
 
 ```starlark
-load("@rules_swiftui_previews//previews:defs.bzl", "swiftui_preview_host")
+load("@swift_agent_tools//previews:defs.bzl", "swiftui_preview_host")
 
 swiftui_preview_host(
     name = "preview_host",
