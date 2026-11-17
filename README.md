@@ -135,3 +135,7 @@ claude plugin test integrations/claude-code/swiftdbg-pane
 ```
 
 </details>
+
+## License
+
+[MIT](LICENSE)
